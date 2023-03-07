@@ -1,0 +1,211 @@
+--viewing the data in the tables downloaded
+select * 
+from [dbo].[dailyActivity_merged]
+
+select *
+from [dbo].[heartrate_seconds_merged]
+
+Select *
+from [dbo].[sleepDay_merged]
+
+Select * 
+from [dbo].[weightLogInfo_merged]
+
+select *
+from [dbo].[hourlyCalories_merged]
+
+select *
+from [dbo].[hourlyIntensities_merged]
+
+select *
+from [dbo].[hourlySteps_merged]
+
+---Determining the no. of records in each table 
+select Count(Distinct Id),
+       Count(distinct ActivityDate) as total_Days
+From [dbo].[dailyActivity_merged] 
+
+select Count(Distinct Id)
+From [dbo].[sleepDay_merged]
+
+select Count(Distinct Id)
+From [dbo].[weightLogInfo_merged]
+
+select Count(Distinct Id)
+From [dbo].[heartrate_seconds_merged]
+
+--total 33 participants, 24 recorded sleep activity, 8 recorded weightlog, and 14 recorded heartrate activity. 
+--the study was done over 31 days 
+
+--DATA CLEANING
+
+--Combining results and preparing data for analysis 
+
+---Creating new cleaned activity table with the desired schema 
+
+drop table if exists daily_activity_cleaned
+CREATE TABLE daily_activity_cleaned (
+    Id varchar(50) NOT NULL,
+    Activity_Date Date NOT NULL,
+    Total_Steps Int,
+    Total_Distance float,
+    Sedentary_Minutes int,
+    Active_Minutes int,
+	Calories int
+);
+--Entering data from the old table to the new table to avoid loss of data in the existing table using only required columns
+INSERT INTO daily_activity_cleaned (
+    Id,
+    Activity_Date,
+    Total_Steps,
+    Total_Distance,
+    Sedentary_Minutes,
+    Active_Minutes,
+	Calories
+)
+SELECT 
+    distinct id, --avoiding duplicates
+    CAST(ActivityDate AS Date),
+    CAST(TotalSteps AS Int),
+    Round(CAST(TotalDistance AS float),2),
+    CAST(SedentaryMinutes AS int),
+    CAST(VeryActiveMinutes AS int) + CAST(FairlyActiveMinutes AS int) + CAST(LightlyActiveMinutes AS int) as Active_Minutes,
+	Round(Cast(Calories as float),2)
+FROM 
+    [dbo].[dailyActivity_merged];
+
+--Checking the new cleaned activity table 
+SELECT *
+FROM [dbo].[daily_activity_cleaned]
+
+--checking for null/missing values values 
+select *
+from [dbo].[daily_activity_cleaned]
+where Total_Steps is null 
+      or Total_Distance is null 
+	  or Sedentary_Minutes is null 
+	  or Active_Minutes is null 
+	  or Calories is null
+
+Select *
+from [dbo].[heartrate_seconds_merged]
+where id is null 
+      or Time is null 
+	  or (Value is null or Value<=0)
+--sleep and weightlog tables have already set their columns to not null 
+--Cleaning weightlog table to match the data types to apply the join operation later
+drop table if exists weightlog_cleaned 
+create table weightlog_cleaned (
+    id varchar(50) not null, 
+	Date date,
+	weightKg float, 
+	BMI float, 
+	ReportedManually varchar(50)
+	);
+Insert into weightlog_cleaned (
+    id, 
+	date,
+	weightKg,
+	BMI,
+	ReportedManually
+	)
+Select cast(id as varchar), 
+       cast(Date as date),
+	   weightkg, 
+	   BMI, 
+	   case when ismanualreport= 1 then 'yes'
+            else 'no'
+			end as ReportedManually
+From [dbo].[weightLogInfo_merged]
+
+select *
+from weightlog_cleaned
+--ANALYSIS
+-- Hourly Analysis 
+drop table if exists hourly_data
+Create table hourly_data(
+             id varchar(50) not null, 
+			 Activity_hour time, 
+			 Calories numeric, 
+			 Intensity numeric, 
+			 Steps numeric,
+			 heart_rate numeric
+			 )
+Insert into hourly_data(
+             id, 
+			 Activity_hour, 
+			 Calories, 
+			 Intensity, 
+			 Steps,
+			 heart_rate
+			 )
+ select a.id,
+       (Cast(a.ActivityHour as time)),
+       (Cast(a.Calories as numeric)),
+	   (cast(b.totalintensity as numeric)),
+	   (Cast(c.stepTotal as numeric)),
+	   (cast(d.Value as numeric)) 
+ From [dbo].[hourlyCalories_merged] as a 
+ join [dbo].[hourlyIntensities_merged] as b on a.id=b.id and a.activityhour= b.activityhour
+ join [dbo].[hourlySteps_merged] as c on a.id=c.id and a.activityhour= c.activityhour
+ join [dbo].[heartrate_seconds_merged] as d on a.id=d.Id and a.ActivityHour=d.Time
+
+ select *
+ from [dbo].[hourly_data]
+
+ --Weekly analysis (how many times a feature is used in each day of the week)
+ select datename( weekday, a.activity_date) as day_of_the_week,
+       count (distinct a.id) as customer_recorded_activity,
+	   count (distinct b.id) as csutomers_recorded_heartrate,
+	    count(distinct c.id) as customer_recorded_weight,
+	   count(distinct d.id)as customer_recorded_sleep
+	  from [dbo].[daily_activity_cleaned]as a
+left join [dbo].[heartrate_seconds_merged] as b on a.id=b.Id and a.Activity_Date=b.Time
+left join [dbo].[weightlog_cleaned] as c on a.id=c.id and a.Activity_Date=c.Date
+left join [dbo].[sleepDay_merged]as d on a.id=d.Id and a.Activity_Date=d.SleepDay
+
+group by datename( weekday, a.activity_date)
+
+--aggregating data into one table to be further analyzed in tableau
+
+Select distinct a.Id, 
+ a.Activity_Date,
+ a.Total_Steps,
+ a.Total_Distance,
+ a.Calories,
+ a.Active_Minutes,
+ a.Sedentary_Minutes ,
+ Cast(hr.Value as numeric) as heart_rate, 
+ sm.TotalMinutesAsleep,
+ sm.TotalTimeInBed,
+ round(wl.weightkg,2)as weightkg,
+ round(wl.BMI,2) as BMI
+
+from [dbo].[daily_activity_cleaned] as a 
+left join [dbo].[heartrate_seconds_merged] as hr on a.id=hr.id and a.Activity_Date=hr.Time
+left join[dbo].[sleepDay_merged] as sm on a.id=sm.id  and  a.Activity_Date=sm.SleepDay
+left join [dbo].[weightlog_cleaned]as wl on a.id=wl.id  and  a.Activity_Date=wl.date
+
+--calculating average activity per customer
+Select id, 
+ Avg(Total_Steps) as avg_steps,
+ Round(Avg(Total_Distance),2) as avg_distance,
+ Avg(Calories) as avg_calories,
+ Avg(Active_Minutes) as avg_active_minutes,
+ Avg(Sedentary_Minutes) as avg_sedantary_minutes
+from [dbo].[daily_activity_cleaned]
+group by id
+order by avg_active_minutes desc
+
+ --weightlog analysis 
+
+ select count(IsmanualReport)
+from [dbo].[weightLogInfo_merged]
+where IsManualReport= 1;
+--41 times the customers recorded weight manually 
+
+
+select count(IsmanualReport)
+from [dbo].[weightLogInfo_merged]
+where IsManualReport= 0;
+--26 times it was recorded digitally 
